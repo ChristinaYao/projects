@@ -1,0 +1,137 @@
+```{r}
+library(shiny)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(plotly)
+netflix <- read.csv("netflix_titles.csv")
+netflix=netflix%>%
+  filter(country=="United States")%>%
+  select(-show_id,-date_added,-director,-cast,-country)
+
+netflix_movies=netflix%>%filter(type=="Movie")
+netflix_tvshows=netflix%>%filter(type=="TV Show")
+```
+
+
+```{r}
+ui <- fluidPage(
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("type", "Type:",
+                  choices = c("Movie", "TV Show"),
+                  selected = "Movie"),
+      textInput("age", "Age:",value=18),
+      verbatimTextOutput("message"),
+      sliderInput("release_year", "Release Year Range:",
+                  min = 1940, max = 2023, value = c(2010, 2023)),
+      selectInput("order","Release Year Order",choices = c("From Newest to Oldest", "From Oldest to Newest"),selected = "From Newest to Oldest"),
+      conditionalPanel(
+        condition = "input.type == 'Movie'",
+        checkboxGroupInput("tv_genre", "Genres:",
+                           choices = unique(unlist(strsplit(netflix_movies$listed_in, ", "))),select="Comedies")
+      ),
+      conditionalPanel(
+        condition = "input.type == 'TV Show'",
+        checkboxGroupInput("movie_genre", "Genres:",
+                           choices = unique(unlist(strsplit(netflix_tvshows$listed_in, ", "))),select="TV Dramas")
+      )
+    ),
+    mainPanel(
+      h3("Recommended Titles"),
+      verbatimTextOutput("m"),
+      tableOutput("recommendations"),
+      plotOutput("chart")
+    )
+  )
+)
+```
+
+```{r}
+server <- function(input, output,session) {
+  output$message <- renderText({
+    if (input$age == "") {
+      "Please enter your age."
+    } else {
+      ""
+    }
+  })
+  
+  output$m <- renderText({
+    if (input$type == "Movie" && length(input$tv_genre) == 0) {
+      "Please select at least one genre."
+    } else if (input$type == "TV Show" && length(input$movie_genre) == 0) {
+      "Please select at least one genre."
+    } else {
+      ""
+    }
+  })
+  
+  filtered_data <- reactive({
+    if (length(input$tv_genre) >0) {
+      data=netflix %>%
+        filter(type == input$type) %>%
+        filter(between(release_year, input$release_year[1], input$release_year[2]))%>%
+        filter(listed_in %in% c(input$movie_genre, input$tv_genre)) %>%
+        arrange(desc(release_year))%>%
+        select(title,description,rating,release_year)
+    
+    if (input$order == "From Oldest to Newest") {
+      data = data %>% arrange(release_year)
+    }
+      
+    if (as.integer(input$age) <= 7) {
+      data <- data %>% filter(rating %in% c("TV-G","TV-Y"))
+    } else if (as.integer(input$age) > 7 & as.integer(input$age) <= 13) {
+      data <- data %>% filter(!rating %in% c("TV-14", "TV-MA", "R","PG-13"))
+    } else if (as.integer(input$age) > 13 & as.integer(input$age) < 18) {
+      data <- data %>% mutate(restriction = ifelse(rating %in% c("TV-MA","R") ,"Need Parent Accompany", "Not Restricted"))
+    }
+    return(data)
+    }
+  })
+  
+  recommend_titles <- function(data) {
+    if (nrow(data) > 0) {
+      return(data)
+    } else {
+      return(NULL)
+    }
+  }
+  
+  recommended_titles <- reactive({
+    recommend_titles(filtered_data())
+  })
+  output$recommendations <- renderTable({
+    recommended_titles()
+  })
+  output$chart <- renderPlot({
+    if (nrow(filtered_data())==0){
+      warning("No data available for selected filters. Please try again.")
+      return(NULL)
+    }else{
+    rating_count=filtered_data()%>%
+      group_by(release_year,rating)%>%
+      summarize(count=n())%>%
+      ungroup()
+    ggplot(rating_count, aes(x=release_year,y=count,fill=rating)) +
+    geom_col(position="stack") +
+    scale_fill_manual(values = c("TV-Y" = "#FACD13", "TV-Y7" = "#FFB13B", "TV-G" = "#3EB650", "TV-PG" = "#00A087", 
+                                   "TV-14" = "#00818A", "TV-MA" = "#0A1172", "G" = "#FFCB05", "PG" = "#FF810E", 
+                                   "PG-13" = "#E84A5F", "R" = "#9B1B30", "NC-17" = "#33001B", "NR" = "#4E4E4E")) +
+    labs(title = "Number of Titles Added to Netflix Over Year",
+       x = "release year",y="number of titles",fill="Type") +
+    scale_fill_viridis_d(option = "magma", begin = 0.2, end = 0.8) +
+    #facet_wrap(~rating,scales="free")+
+    theme_bw()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+    scale_x_continuous(breaks = seq(min(rating_count$release_year), max(rating_count$release_year), by = 1), 
+                     labels = as.character(seq(min(rating_count$release_year), max(rating_count$release_year), by = 1)))+
+    scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) 
+    }
+  })
+}
+
+shinyApp(ui, server)
+```
+
